@@ -1,14 +1,20 @@
 import socket, random, copy, pickle
+import sys
+import time
+import select
 
 HOST = "127.0.0.1"  # Standard loopback interface address (localhost)
 PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
 
-N_MACHINES = 1
+N_MACHINES = 2
 URLS_PER_BATCH = 2
 
 machines = []
-urls_list = ['https://www.youtube.com/watch?v=ghGiv7YLC7Q', 'https://www.youtube.com/watch?v=32wDFCM7iSI']
-urls_free = copy.deepcopy(urls_list)
+urls_list = ['https://www.youtube.com/watch?v=ghGiv7YLC7Q', 'https://www.youtube.com/watch?v=HyHNuVaZJ-k', 'https://www.youtube.com/watch?v=hTWKbfoikeg', 'https://www.youtube.com/watch?v=M1-YeqGynlw', 'https://www.youtube.com/watch?v=k85mRPqvMbE', 'https://www.youtube.com/watch?v=fregObNcHC8', 'https://www.youtube.com/watch?v=ghGiv7YLC7Q', 'https://www.youtube.com/watch?v=32wDFCM7iSI', 'https://www.youtube.com/watch?v=HyHNuVaZJ-k', 'https://www.youtube.com/watch?v=hTWKbfoikeg', 'https://www.youtube.com/watch?v=fregObNcHC8']
+urls_list = list(set(urls_list))  # remove duplicates
+n_to_do = len(urls_list)
+
+start = 0
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.bind((HOST, PORT))
@@ -19,30 +25,39 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         conn, addr = s.accept()
         machines += [conn]
 
+        print('Connected with', addr)
+
+    start = time.time()
+
+    print('\nAll clients connected - starting...\n')
+
     while True:
-        if len(urls_list) == 0:  # stop when all urls have been successfully downloaded
+        print(n_to_do, 'urls left')
+        if n_to_do == 0:  # stop when all urls have been successfully downloaded
             for conn in machines:
                 conn.close()
             break
 
-        urls_free = copy.deepcopy(urls_list)  # as we have removed all done urls, we can now copy urls_list
-
         # send urls to download to all machines
-        for conn in machines:
-            urls_to_do = []
-            for i in range(URLS_PER_BATCH):
-                url = random.choice(urls_free)
-                urls_to_do += [url]
-                urls_free.remove(url)
+        if len(urls_list) > 0:
+            for conn in machines:
+                urls_to_do = []
+                for i in range(URLS_PER_BATCH):
+                    if len(urls_list) == 0: break
+                    url = random.choice(urls_list)
+                    urls_to_do += [url]
+                    urls_list.remove(url)
 
-            data = bytearray(pickle.dumps(urls_to_do))
+                data = bytearray(pickle.dumps(urls_to_do))
 
-            conn.sendall(data)
+                conn.sendall(data)
 
-        # receive from all machines
-        for conn in machines:
+        # Get the list of sockets that are readable
+        read_sockets, write_sockets, error_sockets = select.select(machines, [], [])
 
-            data = conn.recv(25_000_000)  # make sure that this is larger than the total size sent
+        # receive from all ready machines
+        for conn in read_sockets:
+            data = conn.recv(100_000_000)  # make sure that this is larger than the total size sent
 
             # load received data from bytes into list
             video_bytes = pickle.loads(data)
@@ -53,4 +68,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 with open("./out/" + title + ".mp3", "wb") as out_file:
                     out_file.write(audio_bytes)
                     out_file.close()
-                urls_list.remove(url)
+
+                n_to_do -= 1
+
+print("Time taken: " + str(round(time.time() - start)) + " seconds")
